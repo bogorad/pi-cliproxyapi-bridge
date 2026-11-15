@@ -44,9 +44,9 @@ type metaUpstream struct {
 	body   string
 }
 
-// fakeManagement is a CLIProxyAPI management API with the three routes the
+// metaFakeManagement is a CLIProxyAPI management API with the three routes the
 // Meta reader uses. It records every api-call it receives.
-type fakeManagement struct {
+type metaFakeManagement struct {
 	t        *testing.T
 	files    []map[string]any
 	authFile map[string]string       // file name -> downloaded content
@@ -57,7 +57,7 @@ type fakeManagement struct {
 	calls     []apiCallRequest
 }
 
-func (f *fakeManagement) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (f *metaFakeManagement) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Authorization") != "Bearer "+fakeManagementKey {
 		w.WriteHeader(http.StatusUnauthorized)
 		return
@@ -124,8 +124,8 @@ func metaFileEntry(index, name string) map[string]any {
 	}
 }
 
-// newFakeManagement starts the fake and points a plugin config at it.
-func newFakeManagement(t *testing.T, f *fakeManagement) pluginConfig {
+// newMetaFakeManagement starts the fake and points a plugin config at it.
+func newMetaFakeManagement(t *testing.T, f *metaFakeManagement) pluginConfig {
 	t.Helper()
 	f.t = t
 	srv := httptest.NewServer(f)
@@ -158,10 +158,10 @@ func assertNoSecrets(t *testing.T, where, text string) {
 	}
 }
 
-func singleMetaAccount(t *testing.T, f *fakeManagement) usageAccount {
+func singleMetaAccount(t *testing.T, f *metaFakeManagement) usageAccount {
 	t.Helper()
 	logs := captureLogs(t)
-	cfg := newFakeManagement(t, f)
+	cfg := newMetaFakeManagement(t, f)
 	doc, err := buildUsage(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("buildUsage: %v", err)
@@ -194,7 +194,7 @@ func metaGroupsByID(groups []quotaGroup) map[string]quotaGroup {
 // The full chain: list, download the account's own file, then one api-call
 // that carries the real device token and never the $TOKEN$ placeholder.
 func TestMetaQuotaChainAndMapping(t *testing.T) {
-	f := &fakeManagement{
+	f := &metaFakeManagement{
 		files:    []map[string]any{metaFileEntry("idx-1", "meta-one.json")},
 		authFile: map[string]string{"meta-one.json": metaAuthFileJSON(fakeDCAToken)},
 		upstream: map[string]metaUpstream{fakeDCAToken: {http.StatusOK, metaSuccessBody}},
@@ -246,7 +246,7 @@ func TestMetaQuotaChainAndMapping(t *testing.T) {
 // Operator decision: a valid reply without subs_usage reports both windows as
 // 0, with no reset time.
 func TestMetaMissingSubsUsageReportsZero(t *testing.T) {
-	f := &fakeManagement{
+	f := &metaFakeManagement{
 		files:    []map[string]any{metaFileEntry("idx-1", "meta-one.json")},
 		authFile: map[string]string{"meta-one.json": metaAuthFileJSON(fakeDCAToken)},
 		upstream: map[string]metaUpstream{fakeDCAToken: {http.StatusOK,
@@ -327,7 +327,7 @@ func TestMeta429ReportsExhausted(t *testing.T) {
 		{"not json", `rate limited ` + fakeDCAToken, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := &fakeManagement{
+			f := &metaFakeManagement{
 				files:    []map[string]any{metaFileEntry("idx-1", "meta-one.json")},
 				authFile: map[string]string{"meta-one.json": metaAuthFileJSON(fakeDCAToken)},
 				upstream: map[string]metaUpstream{fakeDCAToken: {http.StatusTooManyRequests, tc.body}},
@@ -354,7 +354,7 @@ func TestMeta429ReportsExhausted(t *testing.T) {
 func TestMetaRefusalReportsStatusOnly(t *testing.T) {
 	leaky := `{"error":"bad token ` + fakeDCAToken + `","api_key":"` + fakeMintedKey + `","user_full_name":"` + fakeUserFullName + `"}`
 	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusInternalServerError} {
-		f := &fakeManagement{
+		f := &metaFakeManagement{
 			files:    []map[string]any{metaFileEntry("idx-1", "meta-one.json")},
 			authFile: map[string]string{"meta-one.json": metaAuthFileJSON(fakeDCAToken)},
 			upstream: map[string]metaUpstream{fakeDCAToken: {status, leaky}},
@@ -379,7 +379,7 @@ func TestMetaRejectsNonDCAToken(t *testing.T) {
 		`[]`,
 		`not json ` + fakeDCAToken,
 	} {
-		f := &fakeManagement{
+		f := &metaFakeManagement{
 			files:    []map[string]any{metaFileEntry("idx-1", "meta-one.json")},
 			authFile: map[string]string{"meta-one.json": content},
 		}
@@ -397,7 +397,7 @@ func TestMetaDownloadFailureAndMissingFile(t *testing.T) {
 	runtimeOnly := metaFileEntry("idx-2", "meta-runtime")
 	runtimeOnly["runtime_only"] = true
 	noIndex := metaFileEntry("", "meta-noindex.json")
-	f := &fakeManagement{
+	f := &metaFakeManagement{
 		files: []map[string]any{
 			metaFileEntry("idx-1", "meta-"+fakeUserEmail+".json"),
 			runtimeOnly,
@@ -406,7 +406,7 @@ func TestMetaDownloadFailureAndMissingFile(t *testing.T) {
 		authFile: map[string]string{},
 	}
 	logs := captureLogs(t)
-	cfg := newFakeManagement(t, f)
+	cfg := newMetaFakeManagement(t, f)
 	doc, err := buildUsage(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("buildUsage: %v", err)
@@ -432,7 +432,7 @@ func TestMetaDownloadFailureAndMissingFile(t *testing.T) {
 // Each account sends its own device token, and one failing account does not
 // affect the others.
 func TestMetaMultipleAccounts(t *testing.T) {
-	f := &fakeManagement{
+	f := &metaFakeManagement{
 		files: []map[string]any{
 			metaFileEntry("idx-1", "meta-one.json"),
 			metaFileEntry("idx-2", "meta-two.json"),
@@ -449,7 +449,7 @@ func TestMetaMultipleAccounts(t *testing.T) {
 		},
 	}
 	logs := captureLogs(t)
-	cfg := newFakeManagement(t, f)
+	cfg := newMetaFakeManagement(t, f)
 	doc, err := buildUsage(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("buildUsage: %v", err)
