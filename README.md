@@ -178,11 +178,14 @@ logged, cached, stored, put in an error, or returned. The reply also carries
 - `429` means the account is out of usage: both windows report `0`, with
   `resetTime` from the `error.resets_at` of that reply when present.
 - Any other refusal is reported as `provider API failed: <status>`.
-- A failure changes only the quota view; the call does not refresh or change
-  the credential that serves inference.
+- A failure changes only the quota view. The `/api-call` carries no `$TOKEN$`,
+  so CLIProxyAPI does not refresh or rewrite the credential that serves
+  inference.
 
-The usage TTL applies to the whole document, so Meta is read as often as the
-other providers (`usage_ttl_seconds`, default `120`).
+`muse-code/key` is Meta's key-mint endpoint, not a read-only quota API, and it
+is not documented. It is not known whether a call can rotate the minted
+`api_key`. The usage TTL applies to the whole document, so Meta is read as
+often as the other providers (`usage_ttl_seconds`, default `120`).
 
 ### When a provider changes shape
 
