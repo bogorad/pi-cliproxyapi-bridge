@@ -216,7 +216,7 @@ func TestNormalizeProviderAndSupport(t *testing.T) {
 		t.Fatal("expected copilot to normalize to github-copilot")
 	}
 	// Parity with the sidecar: these providers report real quota.
-	for _, provider := range []string{"anthropic", "codex", "antigravity", "github-copilot"} {
+	for _, provider := range []string{"anthropic", "codex", "antigravity", "github-copilot", "meta"} {
 		if !providerSupported(provider) {
 			t.Fatalf("%s must be supported", provider)
 		}

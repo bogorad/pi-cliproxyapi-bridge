@@ -74,7 +74,7 @@ type quotaModel struct {
 // of being silently dropped.
 func providerSupported(provider string) bool {
 	switch normalizeProvider(provider) {
-	case "claude", "codex", "antigravity", "github-copilot":
+	case "claude", "codex", "antigravity", "github-copilot", "meta":
 		return true
 	default:
 		return false
@@ -182,6 +182,8 @@ func fetchQuota(ctx context.Context, cfg pluginConfig, provider string, file aut
 		return fetchAntigravityQuota(ctx, cfg, file)
 	case "github-copilot":
 		return fetchCopilotQuota(ctx, cfg, file.AuthIndex)
+	case "meta":
+		return fetchMetaQuota(ctx, cfg, file)
 	default:
 		return nil, nil
 	}
