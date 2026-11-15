@@ -243,8 +243,9 @@ func TestMetaQuotaChainAndMapping(t *testing.T) {
 	}
 }
 
-// A valid reply without subs_usage is unknown quota, not full quota.
-func TestMetaMissingSubsUsageHasNoGroups(t *testing.T) {
+// Operator decision: a valid reply without subs_usage reports both windows as
+// 0, with no reset time.
+func TestMetaMissingSubsUsageReportsZero(t *testing.T) {
 	f := &fakeManagement{
 		files:    []map[string]any{metaFileEntry("idx-1", "meta-one.json")},
 		authFile: map[string]string{"meta-one.json": metaAuthFileJSON(fakeDCAToken)},
@@ -252,19 +253,52 @@ func TestMetaMissingSubsUsageHasNoGroups(t *testing.T) {
 			`{"api_key":"` + fakeMintedKey + `","user_full_name":"` + fakeUserFullName + `"}`}},
 	}
 	account := singleMetaAccount(t, f)
-	if account.Error != "" || len(account.Groups) != 0 || account.Groups == nil {
-		t.Fatalf("account = %+v", account)
+	if account.Error != "" {
+		t.Fatalf("error = %q", account.Error)
+	}
+	groups := metaGroupsByID(account.Groups)
+	if len(groups) != 2 {
+		t.Fatalf("groups = %+v", account.Groups)
+	}
+	for _, id := range []string{"usage-window", "seven-day"} {
+		if groups[id].RemainingFraction != 0 || groups[id].ResetTime != "" {
+			t.Fatalf("%s = %+v", id, groups[id])
+		}
+	}
+	if groups["usage-window"].Label != "Usage Window" || groups["seven-day"].Label != "7d Weekly" {
+		t.Fatalf("labels = %q, %q", groups["usage-window"].Label, groups["seven-day"].Label)
 	}
 }
 
-// An idle rolling window is omitted by Meta; only the weekly window remains.
-func TestMetaIdleWindowIsAbsent(t *testing.T) {
-	groups, err := parseMetaQuota(`{"subs_usage":{"weekly":{"used_percent":12,"resets_at":1763600000},"window":{"used_percent":null}}}`)
-	if err != nil {
-		t.Fatalf("parse: %v", err)
+// A missing or null window reports 0; the window that is present keeps its
+// real value, and a known reset or duration is kept.
+func TestMetaMissingWindowReportsZero(t *testing.T) {
+	for _, body := range []string{
+		`{"subs_usage":{"weekly":{"used_percent":12,"resets_at":1763600000}}}`,
+		`{"subs_usage":{"weekly":{"used_percent":12,"resets_at":1763600000},"window":{"used_percent":null,"window_duration_mins":300,"resets_at":1763251200}}}`,
+	} {
+		groups, err := parseMetaQuota(body)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		got := metaGroupsByID(groups)
+		if len(groups) != 2 || groups[0].ID != "usage-window" || groups[1].ID != "seven-day" {
+			t.Fatalf("groups = %+v", groups)
+		}
+		if math.Abs(got["seven-day"].RemainingFraction-0.88) > 1e-9 {
+			t.Fatalf("weekly = %+v", got["seven-day"])
+		}
+		if got["usage-window"].RemainingFraction != 0 {
+			t.Fatalf("usage window = %+v", got["usage-window"])
+		}
 	}
-	if len(groups) != 1 || groups[0].ID != "seven-day" || math.Abs(groups[0].RemainingFraction-0.88) > 1e-9 {
-		t.Fatalf("groups = %+v", groups)
+	groups, _ := parseMetaQuota(`{"subs_usage":{"window":{"used_percent":null,"window_duration_mins":300,"resets_at":1763251200}}}`)
+	got := metaGroupsByID(groups)
+	if got["usage-window"].Label != "5h Window" || got["usage-window"].ResetTime != "2025-11-16T00:00:00Z" {
+		t.Fatalf("known duration or reset lost: %+v", got["usage-window"])
+	}
+	if got["seven-day"].RemainingFraction != 0 || got["seven-day"].ResetTime != "" {
+		t.Fatalf("missing weekly = %+v", got["seven-day"])
 	}
 }
 

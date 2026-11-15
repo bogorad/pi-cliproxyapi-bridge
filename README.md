@@ -173,8 +173,10 @@ logged, cached, stored, put in an error, or returned. The reply also carries
 `remainingFraction` is `1 - used_percent / 100`, clamped to 0–1, and
 `resetTime` is `resets_at` (Unix seconds) as RFC 3339.
 
-- A reply without `subs_usage`, or without one of its windows (Meta omits an
-  idle window), gives no group for it. That is unknown quota, not full quota.
+- Both groups are always reported. A reply without `subs_usage`, or a window
+  without `used_percent`, reports that window as `0`, with `resetTime` only
+  when the reply gives it. Limitation: an account with an idle 5h window gets
+  the same reply, so a window can show `0` while credits remain.
 - `429` means the account is out of usage: both windows report `0`, with
   `resetTime` from the `error.resets_at` of that reply when present.
 - Any other refusal is reported as `provider API failed: <status>`.

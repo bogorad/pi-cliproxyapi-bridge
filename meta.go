@@ -176,9 +176,10 @@ type metaQuotaPayload struct {
 	} `json:"subs_usage"`
 }
 
-// parseMetaQuota maps subs_usage onto groups. A reply without subs_usage, or
-// without one of its windows, is unknown quota (for example an idle window),
-// so the window is absent rather than reported as full.
+// parseMetaQuota maps subs_usage onto the two Muse windows. Both groups are
+// always reported. Operator decision: a reply without subs_usage, or a window
+// without used_percent, reports that window as 0. An idle 5h window gives
+// the same reply, so a window can show 0 while credits remain.
 func parseMetaQuota(body string) ([]quotaGroup, error) {
 	if !isJSONObject([]byte(body)) {
 		return nil, errMetaInvalidReply
@@ -187,33 +188,37 @@ func parseMetaQuota(body string) ([]quotaGroup, error) {
 	if err := json.Unmarshal([]byte(body), &payload); err != nil {
 		return nil, errMetaInvalidReply
 	}
-	if payload.SubsUsage == nil {
-		return nil, nil
+	var rolling, weekly *metaWindowUsage
+	if payload.SubsUsage != nil {
+		rolling, weekly = payload.SubsUsage.Window, payload.SubsUsage.Weekly
 	}
 
-	groups := []quotaGroup{}
+	groups := make([]quotaGroup, 0, 2)
 	for _, w := range []struct {
 		id     string
 		label  string
 		window *metaWindowUsage
 	}{
-		{"usage-window", "", payload.SubsUsage.Window},
-		{"seven-day", "7d Weekly", payload.SubsUsage.Weekly},
+		{"usage-window", "", rolling},
+		{"seven-day", "7d Weekly", weekly},
 	} {
-		if w.window == nil || !w.window.UsedPercent.valid {
-			continue
+		var (
+			remaining float64
+			reset     string
+			minutes   *float64
+		)
+		if w.window != nil {
+			minutes = w.window.WindowDurationMins.positive()
+			reset = unixToRFC3339(w.window.ResetsAt.unixSeconds())
+			if w.window.UsedPercent.valid {
+				remaining = remainingFromPercent(math.Min(100, math.Max(0, w.window.UsedPercent.value)))
+			}
 		}
 		label := w.label
 		if label == "" {
-			label = metaWindowLabel(w.window.WindowDurationMins.positive())
+			label = metaWindowLabel(minutes)
 		}
-		used := math.Min(100, math.Max(0, w.window.UsedPercent.value))
-		groups = append(groups, simpleGroup(
-			w.id,
-			label,
-			remainingFromPercent(used),
-			unixToRFC3339(w.window.ResetsAt.unixSeconds()),
-		))
+		groups = append(groups, simpleGroup(w.id, label, remaining, reset))
 	}
 	return groups, nil
 }
