@@ -152,6 +152,7 @@ not have carries a null percent and is omitted rather than reported as full.
 | `antigravity` | `pro-models`, `flash-models`, `thinking-models`, `other-models` |
 | `github-copilot` | `premium-requests` |
 | `xai` | `seven-day` ("7d Weekly") |
+| `meta` | `usage-window`, `seven-day` |
 
 Other providers are listed with `supported: false` and in
 `unsupportedProviders`.
@@ -177,6 +178,52 @@ of the current weekly period.
 
 Grok rejects clients it considers too old; raise `xai_client_version` in the
 advanced JSON if the billing read starts returning `426`.
+
+### Meta (Muse) quota
+
+`meta` accounts are read from `POST https://api.meta.ai/muse-code/key`, the
+endpoint the CLIProxyAPI Management Center uses for the same view.
+
+Meta is the one provider that cannot use `$TOKEN$`: CLIProxyAPI resolves it to
+the minted LLM `api_key`, and `muse-code/key` rejects that key with `401`. The
+endpoint accepts only the `dca:` device token. So, for each `meta` account, the
+plugin:
+
+1. downloads the account's auth file with
+   `GET /v0/management/auth-files/download?name=<file>` (management key),
+2. reads only `dca_token`, which must start with `dca:` (nothing else is used
+   as a fallback),
+3. sends it as `Authorization: Bearer <dca_token>` through
+   `POST /v0/management/api-call` with the account's `auth_index`.
+
+The device token lives in memory for that one request only. It is never
+logged, cached, stored, put in an error, or returned. The reply also carries
+`api_key`, `user_email` and `user_full_name`; the plugin decodes only
+`subs_usage` and never echoes the body.
+
+| Meta field | Group | Label |
+| --- | --- | --- |
+| `subs_usage.window` | `usage-window` | from `window_duration_mins` (`5h Window`) |
+| `subs_usage.weekly` | `seven-day` | `7d Weekly` |
+
+`remainingFraction` is `1 - used_percent / 100`, clamped to 0–1, and
+`resetTime` is `resets_at` (Unix seconds) as RFC 3339.
+
+- Both groups are always reported. A reply without `subs_usage`, or a window
+  without `used_percent`, reports that window as `0`, with `resetTime` only
+  when the reply gives it. Limitation: an account with an idle 5h window gets
+  the same reply, so a window can show `0` while credits remain.
+- `429` means the account is out of usage: both windows report `0`, with
+  `resetTime` from the `error.resets_at` of that reply when present.
+- Any other refusal is reported as `provider API failed: <status>`.
+- A failure changes only the quota view. The `/api-call` carries no `$TOKEN$`,
+  so CLIProxyAPI does not refresh or rewrite the credential that serves
+  inference.
+
+`muse-code/key` is Meta's key-mint endpoint, not a read-only quota API, and it
+is not documented. It is not known whether a call can rotate the minted
+`api_key`. The usage TTL applies to the whole document, so Meta is read as
+often as the other providers (`usage_ttl_seconds`, default `120`).
 
 ### When a provider changes shape
 

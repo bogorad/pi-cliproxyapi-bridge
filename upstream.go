@@ -161,6 +161,7 @@ type authFile struct {
 	StatusMessage string `json:"status_message"`
 	Disabled      bool   `json:"disabled"`
 	Unavailable   bool   `json:"unavailable"`
+	RuntimeOnly   bool   `json:"runtime_only"`
 	Success       int    `json:"success"`
 	Failed        int    `json:"failed"`
 	LastRefresh   string `json:"last_refresh"`
