@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -43,6 +44,11 @@ type advancedConfig struct {
 	UsageTTLSeconds        int    `json:"usage_ttl_seconds"`
 	CapabilitiesTTLSeconds int    `json:"capabilities_ttl_seconds"`
 	PublicBaseURL          string `json:"public_base_url"`
+
+	// LastGoodMaxAgeSeconds bounds how long the last good quota read of an
+	// account is served, marked stale, while its reads fail. 0 or absent
+	// means the default (24 h); a negative value turns the fallback off.
+	LastGoodMaxAgeSeconds int `json:"last_good_max_age_seconds"`
 
 	// XAIClientVersion is sent as x-grok-client-version on the xAI billing
 	// read. Grok rejects clients it considers too old, so a deployment can
@@ -88,8 +94,23 @@ func defaultAdvanced() advancedConfig {
 		// more briefly and simply re-read this document.
 		UsageTTLSeconds:        120,
 		CapabilitiesTTLSeconds: 300,
+		LastGoodMaxAgeSeconds:  defaultLastGoodMaxAgeSeconds,
 		XAIClientVersion:       "1.0.13",
 	}
+}
+
+// defaultLastGoodMaxAgeSeconds keeps a last good quota read for one day. That
+// covers the short read failures seen in practice by far, and a weekly window
+// still shows a usable number after it.
+const defaultLastGoodMaxAgeSeconds = 24 * 60 * 60
+
+// lastGoodMaxAge is the maximum age of a last good quota read. Zero means the
+// fallback is off.
+func (c pluginConfig) lastGoodMaxAge() time.Duration {
+	if c.advanced.LastGoodMaxAgeSeconds <= 0 {
+		return 0
+	}
+	return time.Duration(c.advanced.LastGoodMaxAgeSeconds) * time.Second
 }
 
 func defaultConfig() pluginConfig {
@@ -151,6 +172,9 @@ func parseConfig(raw []byte) (pluginConfig, error) {
 	}
 	if adv.CapabilitiesTTLSeconds <= 0 {
 		adv.CapabilitiesTTLSeconds = fallback.CapabilitiesTTLSeconds
+	}
+	if adv.LastGoodMaxAgeSeconds == 0 {
+		adv.LastGoodMaxAgeSeconds = fallback.LastGoodMaxAgeSeconds
 	}
 	adv.XAIClientVersion = strings.TrimSpace(adv.XAIClientVersion)
 	if adv.XAIClientVersion == "" {

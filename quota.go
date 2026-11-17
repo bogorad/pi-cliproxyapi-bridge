@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -50,6 +51,14 @@ type usageAccount struct {
 	Supported     bool         `json:"supported"`
 	Error         string       `json:"error,omitempty"`
 	Groups        []quotaGroup `json:"groups"`
+
+	// Stale is set when the last read failed and Groups holds the last good
+	// read instead; Error then carries the failure. LastGoodAt is the time of
+	// that good read and StaleSince the first failed read after it (RFC 3339).
+	// Contract v2 only. All three are omitted while reads succeed.
+	Stale      bool   `json:"stale,omitempty"`
+	LastGoodAt string `json:"lastGoodAt,omitempty"`
+	StaleSince string `json:"staleSince,omitempty"`
 }
 
 type quotaGroup struct {
@@ -58,6 +67,9 @@ type quotaGroup struct {
 	RemainingFraction float64      `json:"remainingFraction"`
 	ResetTime         string       `json:"resetTime,omitempty"`
 	Models            []quotaModel `json:"models,omitempty"`
+	// Stale marks numbers that are not current: the group comes from the
+	// last good read, or its reset time has passed. Contract v2 only.
+	Stale bool `json:"stale,omitempty"`
 }
 
 // quotaModel is a per-model breakdown within a group, which providers like
@@ -109,7 +121,17 @@ func accountStatus(file authFile) string {
 
 // buildUsage assembles the quota document for every credential the host knows
 // about, reading each provider through the fixed management passthrough.
+//
+// buildUsage keeps no memory between calls. The usage route calls
+// buildUsageWith with the plugin's last good store.
 func buildUsage(ctx context.Context, cfg pluginConfig) (usageDocument, error) {
+	return buildUsageWith(ctx, cfg, newLastGoodStore(), time.Now())
+}
+
+// buildUsageWith is buildUsage with an explicit last good store and clock. A
+// failed read of an account with a recent good read serves that read, marked
+// stale, instead of no groups.
+func buildUsageWith(ctx context.Context, cfg pluginConfig, store *lastGoodStore, now time.Time) (usageDocument, error) {
 	files, err := cfg.fetchAuthFiles(ctx)
 	if err != nil {
 		return usageDocument{}, err
@@ -117,11 +139,13 @@ func buildUsage(ctx context.Context, cfg pluginConfig) (usageDocument, error) {
 
 	doc := usageDocument{
 		SchemaVersion: 1,
-		GeneratedAt:   time.Now().UTC().Format(time.RFC3339),
+		GeneratedAt:   now.UTC().Format(time.RFC3339),
 		Accounts:      []usageAccount{},
 		Unsupported:   []string{},
 	}
 
+	maxAge := cfg.lastGoodMaxAge()
+	present := map[string]bool{}
 	unsupported := map[string]bool{}
 	for _, file := range files {
 		provider := normalizeProvider(file.Provider)
@@ -155,15 +179,36 @@ func buildUsage(ctx context.Context, cfg pluginConfig) (usageDocument, error) {
 		// A single credential failing must not fail the whole document. The
 		// reason is reported per account, mirroring the sidecar, so an expired
 		// login is visible rather than silently showing no quota.
+		//
+		// Status and availability do not matter here: an account in a short
+		// cooldown (status "error", unavailable) still has quota and still
+		// appears with its groups.
+		key := lastGoodKey(provider, file)
+		present[key] = true
 		groups, errQuota := fetchQuota(ctx, cfg, provider, file)
-		if errQuota != nil {
-			account.Error = errQuota.Error()
-		} else if len(groups) > 0 {
-			// Groups stays an empty slice otherwise, never null.
+		if errQuota == nil && len(groups) == 0 {
+			errQuota = errNoQuotaGroups
+		}
+		if errQuota == nil {
 			account.Groups = groups
+			store.record(key, groups, now)
+		} else {
+			account.Error = errQuota.Error()
+			if last, at, since, ok := store.fallback(key, now, maxAge); ok {
+				for i := range last {
+					last[i].Stale = true
+				}
+				account.Groups = last
+				account.Stale = true
+				account.LastGoodAt = at.UTC().Format(time.RFC3339)
+				account.StaleSince = since.UTC().Format(time.RFC3339)
+			}
+			// Without a recent good read Groups stays an empty slice: never
+			// null, and never made-up numbers.
 		}
 		doc.Accounts = append(doc.Accounts, account)
 	}
+	store.prune(present, now, maxAge)
 
 	for provider := range unsupported {
 		doc.Unsupported = append(doc.Unsupported, provider)
@@ -208,6 +253,9 @@ func simpleGroup(id, label string, remaining float64, resetTime string) quotaGro
 		}},
 	}
 }
+
+// errNoQuotaGroups reports a read that succeeded but carried no quota window.
+var errNoQuotaGroups = errors.New("no quota groups reported")
 
 // providerFailure describes an upstream refusal in a form safe to show a
 // client: a status code, never the response body.

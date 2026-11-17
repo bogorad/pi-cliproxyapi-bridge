@@ -104,6 +104,18 @@ unmigrated client sees no change.
 **v2** adds a `cache` section (`updatedAt`, `stale`, `ttlMs`) and a `client`
 section (`keyHint`).
 
+v2 also keeps quota through a failed read. When the quota read of an account
+fails (provider error, timeout, or no windows) after a good read, the account
+keeps the groups of that good read and gets `stale: true`, `lastGoodAt` (time
+of the good read), `staleSince` (first failed read after it), and `error` (the
+failure). Each of those groups has `stale: true`. A group whose `resetTime`
+has passed also gets `stale: true`; its `resetTime` stays. All these fields
+are omitted while reads succeed. The last good read is kept in memory only,
+for at most `last_good_max_age_seconds` (default one day), and is dropped when
+the account leaves auth-files or the plugin config changes. A first failed
+read stays an error with no groups. v1 does not get these groups or fields: a
+failed read there is an error with no groups, as before.
+
 Every response echoes `X-Pi-Contract` and `X-Pi-Contract-Latest`, so a client
 can detect that a newer contract exists and warn without parsing the body.
 
@@ -311,6 +323,7 @@ Leave `advanced` empty unless a URL, secret source, or cache TTL must differ:
 | `usage_ttl_seconds` | `120` |
 | `capabilities_ttl_seconds` | `300` |
 | `xai_client_version` | `1.0.13` (sent as `x-grok-client-version`) |
+| `last_good_max_age_seconds` | `86400` (how long a last good quota read is served while reads fail; negative turns it off) |
 
 ### Management UI
 

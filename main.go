@@ -124,6 +124,8 @@ var (
 	usageCache = newTTLCache()
 	capCache   = newTTLCache()
 	refreshers = newRateLimiter()
+	// lastGood is never replaced, only reset, so readers need no stateMu.
+	lastGood = newLastGoodStore()
 )
 
 func currentConfig() (pluginConfig, error) {
@@ -250,6 +252,9 @@ func applyLifecycleConfig(request []byte) {
 	configErr = nil
 	usageCache = newTTLCache()
 	capCache = newTTLCache()
+	// New settings (quota rules, management URL) can change what a good read
+	// is, so the last good reads of the old settings are not kept.
+	lastGood.reset()
 }
 
 // keyCheckboxFields declares one checkbox per API key the proxy accepts, so the
@@ -463,7 +468,7 @@ func handleUsage(cfg pluginConfig, client authenticatedClient, query url.Values,
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	doc, err := buildUsage(ctx, cfg)
+	doc, err := buildUsageWith(ctx, cfg, lastGood, time.Now())
 	if err != nil {
 		return okEnvelope(jsonResponse(http.StatusBadGateway, map[string]string{"error": "upstream usage is unavailable"}))
 	}
@@ -478,17 +483,21 @@ func handleUsage(cfg pluginConfig, client authenticatedClient, query url.Values,
 }
 
 // shapeForContract renders the cached upstream document for one contract
-// version. v1 is the sidecar's shape exactly; v2 adds cache provenance and the
-// authenticated client hint.
+// version. v1 is the sidecar's shape exactly; v2 adds cache provenance, the
+// authenticated client hint, the last good groups of failed reads with their
+// stale markers, and a stale marker on groups whose reset time has passed.
 func shapeForContract(encoded []byte, contract int, client authenticatedClient, storedAt time.Time, ttl time.Duration) []byte {
 	if contract < contractLatest {
-		return encoded
+		return withoutLastGood(encoded)
 	}
 
 	var doc usageDocument
 	if err := json.Unmarshal(encoded, &doc); err != nil {
 		return encoded
 	}
+	// Checked when served, not when read: a reset can pass while the
+	// document sits in the cache.
+	markPassedResets(&doc, time.Now())
 	doc.Client = &clientIdentity{KeyHint: client.KeyHint}
 	doc.Cache = &cacheInfo{
 		UpdatedAt: storedAt.UTC().Format(time.RFC3339),
